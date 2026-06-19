@@ -1,4 +1,4 @@
 fastapi
 uvicorn[standard]
-twilio
-websockets
+requests
+python-dotenv
