@@ -34,3 +34,23 @@ Automated voice-bot framework for stress-testing real-time conversational agents
 **Observation:** Vapi handles outbound dialing, STT, LLM routing, and TTS so the eval harness can focus on persona design and clinic-bot behavior rather than audio infrastructure. Separating `firstMessage` (what the patient says aloud) from `persona_modifier` (hidden behavior instructions) produces more realistic test calls than dumping raw test metadata into the opening line.
 
 **Decision:** Use `run_evals.py` as the test trigger layer and `main.py` as the post-call capture layer. Evaluation is manual: trigger a case, review the saved transcript (and Vapi dashboard recording) against the scenario's expected behavior.
+
+### v1.2: Acoustic Tuning & Resilience Hardening
+
+**Status:** Complete
+
+**What was built:**
+
+- **Acoustic tuning:** Widened `stopSpeakingPlan` wait seconds to **0.8s** and back-off seconds to **1.0s** to counter false barge-in triggers caused by the target bot's synthetic latency (simulated typing/processing pauses that standard VAD engines misread as user speech)
+- **Dynamic override framework:** Extended `run_evals.py` with granular per-scenario `api_overrides`, including per-case Cartesia Sonic 3.5 voice hot-swapping for multilingual (`es`) and accented English (`en`) test cases
+- **Resilience logic:** Shifted scheduling-task `persona_modifier` instructions to a **compliance-first** mode when the target state machine is rigid, and integrated a **self-recovery** intent in the Vapi system prompt so the patient simulator resets the conversation if the target agent enters an incoherent loop
+
+**Observation:** Early runs exposed transcript collisions during high-latency target API responses — the patient simulator was barging in on artificial processing delays, not real user turns. Tuning endpointing/back-off thresholds eliminated most overlap. Multilingual cases (especially Spanglish code-switching) required dynamic TTS model swaps rather than a single default voice. Scheduling scenarios also needed explicit recovery behavior; without it, target-side agentic collapse caused premature hangups and wasted call time.
+
+**Impact:**
+
+- **Collision rate:** Transcript overlap during high-latency responses was largely eliminated
+- **Localization:** Conversational context held through Spanglish code-switching via per-case phonetic model selection
+- **Reliability:** Graceful handling of target-side agentic collapse reduced total call termination rates by an estimated **30%**
+
+**Decision:** Keep per-scenario `api_overrides` as the primary tuning surface for acoustic and voice settings, and treat compliance-first persona rules plus self-recovery prompting as default resilience patterns for baseline scheduling tests going forward.

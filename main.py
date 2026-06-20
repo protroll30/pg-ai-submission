@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -55,15 +54,19 @@ def _save_transcript(
 ) -> Path:
     _ensure_output_dirs()
     timestamp = _timestamp()
-    filename = TRANSCRIPTS_DIR / f"{timestamp}_{call_id}.json"
-    payload = {
-        "call_id": call_id,
-        "duration_seconds": duration_seconds,
-        "transcript": transcript,
-        "recording_file": recording_file,
-        "saved_at": timestamp,
-    }
-    filename.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    filename = TRANSCRIPTS_DIR / f"{timestamp}_{call_id}.md"
+
+    content = (
+        f"# Call Report: {call_id}\n\n"
+        f"## Metrics\n"
+        f"- **Call Duration:** {duration_seconds:.2f}s\n"
+        f"- **Recording:** {recording_file or 'N/A'}\n"
+        f"- **Saved At:** {timestamp}\n\n"
+        f"## Transcript\n\n"
+        f"{transcript}\n"
+    )
+
+    filename.write_text(content, encoding="utf-8")
     logger.info("Transcript saved | file='%s'", filename)
     return filename
 
