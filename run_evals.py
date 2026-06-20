@@ -17,6 +17,20 @@ logger = logging.getLogger("run_evals")
 
 VAPI_CALLS_URL = "https://api.vapi.ai/call/phone"
 
+# Vapi Cartesia voice models: sonic-3, sonic-multilingual, sonic-english, etc.
+# See https://docs.vapi.ai/providers/voice/cartesia
+CARTESIA_SPANISH_VOICE_ID = os.getenv("CARTESIA_SPANISH_VOICE_ID", "")
+CARTESIA_ENGLISH_VOICE_ID = os.getenv("CARTESIA_ENGLISH_VOICE_ID", "")
+
+
+def _cartesia_voice(model: str, language: str, voice_id: str) -> dict:
+    return {
+        "provider": "cartesia",
+        "voiceId": voice_id,
+        "model": model,
+        "language": language,
+    }
+
 TEST_SCENARIOS = {
     # ==========================================
     # TIER 1: THE BASELINE (Happy Paths)
@@ -66,6 +80,13 @@ TEST_SCENARIOS = {
             "Interrupt the bot the exact second it starts speaking to test barge-in handling."
         ),
         "first_message": "Hi, I need to schedule an appointment. I'm in a bit of a rush.",
+        "api_overrides": {
+            "stopSpeakingPlan": {
+                "numWords": 0,
+                "voiceSeconds": 0.2,
+                "backoffSeconds": 0.1,
+            },
+        },
     },
     "tc_06_soft_spoken_elder": {
         "persona_modifier": (
@@ -135,6 +156,10 @@ TEST_SCENARIOS = {
         ),
         "first_message": "Yeah, hi, sorry, it's loud in here. I need to book an appointment for Tuesday.",
     },
+    # ==========================================
+    # TIER 6: MULTILINGUAL & LOCALIZATION ROBUSTNESS
+    # Tests code-switching, fallback routing, and ASR intent limits.
+    # ==========================================
     "tc_13_code_switching_spanglish": {
         "persona_modifier": (
             "CRITICAL TEST MODIFIER: You are a bilingual patient who naturally switches between English and "
@@ -144,6 +169,9 @@ TEST_SCENARIOS = {
             "can follow the hybrid context or if it entirely loses track of the request."
         ),
         "first_message": "Hi, I need to reschedule my physical appointment.",
+        "api_overrides": {
+            "voice": _cartesia_voice("sonic-multilingual", "en", CARTESIA_SPANISH_VOICE_ID),
+        },
     },
     "tc_14_pure_spanish_flow": {
         "persona_modifier": (
@@ -153,6 +181,22 @@ TEST_SCENARIOS = {
             "seamlessly translates its state machine to Spanish or handles the interaction with an elegant fallback."
         ),
         "first_message": "Hola, buenas tardes, necesito programar una cita médica para un chequeo general.",
+        "api_overrides": {
+            "voice": _cartesia_voice("sonic-3", "es", CARTESIA_SPANISH_VOICE_ID),
+        },
+    },
+    "tc_15_syntax_and_vocabulary_distortion": {
+        "persona_modifier": (
+            "CRITICAL TEST MODIFIER: You are speaking English, but you use highly non-linear grammatical "
+            "structures and unusual phrasing. Do not use standard conversational flow. For example, say: "
+            "'Appointment booking I am wanting for physical checkup, doctor telling me to call this number. Next week "
+            "possible or not possible?' Test if the clinic bot's intent-matching can parse the correct meaning "
+            "despite the chaotic syntax."
+        ),
+        "first_message": "Appointment booking I am wanting for physical checkup, please.",
+        "api_overrides": {
+            "voice": _cartesia_voice("sonic-3", "en", CARTESIA_ENGLISH_VOICE_ID),
+        },
     },
 }
 
@@ -167,20 +211,34 @@ def _load_config() -> dict:
     return config
 
 
-def _build_call_payload(
-    config: dict,
-    test_name: str,
-    persona_modifier: str,
-    first_message: str,
-) -> dict:
+def _validate_scenario(scenario: dict, test_name: str) -> None:
+    voice = scenario.get("api_overrides", {}).get("voice", {})
+    if voice.get("provider") == "cartesia" and not voice.get("voiceId"):
+        logger.error(
+            "Test '%s' requires a Cartesia voiceId. Set CARTESIA_SPANISH_VOICE_ID "
+            "and/or CARTESIA_ENGLISH_VOICE_ID in .env.",
+            test_name,
+        )
+        sys.exit(1)
+
+
+def _build_call_payload(config: dict, test_name: str, scenario: dict) -> dict:
     overrides: dict = {
         "variableValues": {
             "test_name": test_name,
-            "persona_modifier": persona_modifier,
+            "persona_modifier": scenario["persona_modifier"],
         },
     }
+
+    first_message = scenario.get("first_message", "")
     if first_message:
         overrides["firstMessage"] = first_message
+
+    overrides.update(scenario.get("api_overrides", {}))
+
+    artifact_plan = overrides.setdefault("artifactPlan", {})
+    artifact_plan.setdefault("recordingEnabled", True)
+    artifact_plan.setdefault("recordingFormat", "mp3")
 
     return {
         "phoneNumberId": config["VAPI_PHONE_NUMBER_ID"],
@@ -194,12 +252,8 @@ def _build_call_payload(
 
 def trigger_outbound_call(test_name: str, scenario: dict) -> dict:
     config = _load_config()
-    payload = _build_call_payload(
-        config,
-        test_name=test_name,
-        persona_modifier=scenario["persona_modifier"],
-        first_message=scenario["first_message"],
-    )
+    _validate_scenario(scenario, test_name)
+    payload = _build_call_payload(config, test_name, scenario)
 
     headers = {
         "Authorization": f"Bearer {config['VAPI_API_KEY']}",
@@ -238,9 +292,11 @@ def trigger_outbound_call(test_name: str, scenario: dict) -> dict:
 def list_scenarios() -> None:
     print("Available test cases:\n")
     for name, scenario in TEST_SCENARIOS.items():
-        opener = scenario["first_message"] or "(silent)"
+        opener = scenario.get("first_message") or "(silent)"
         print(f"  {name}")
         print(f"    Opens with: {opener}")
+        if scenario.get("api_overrides"):
+            print(f"    API overrides: {scenario['api_overrides']}")
         print(f"    Persona: {scenario['persona_modifier']}\n")
 
 
