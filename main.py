@@ -6,6 +6,8 @@ import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from latency_logger import finalize_call, handle_event
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -102,12 +104,14 @@ async def vapi_webhook(request: Request) -> JSONResponse:
     event_type: str = body.get("message", {}).get("type", "")
     logger.info("Received webhook event | type='%s'", event_type)
 
+    handle_event(body)
+
     if event_type != "end-of-call-report":
-        logger.info("Ignoring non-terminal event type: '%s'", event_type)
-        return JSONResponse(content={"status": "ignored", "event_type": event_type})
+        return JSONResponse(content={"status": "logged", "event_type": event_type})
 
     message: dict = body.get("message", {})
     call_id, duration, transcript, artifact = _parse_end_of_call_report(message)
+    finalize_call(call_id)
 
     logger.info(
         "Processing end-of-call-report | call_id='%s' | duration=%.2fs | "

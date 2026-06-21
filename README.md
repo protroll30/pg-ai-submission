@@ -122,8 +122,31 @@ uvicorn main:app --reload
 
 Server runs at `http://127.0.0.1:8000`. Endpoints:
 
-- `POST /vapi-webhook` — receives Vapi end-of-call reports
+- `POST /vapi-webhook` — receives Vapi server events and end-of-call reports
 - `GET /health` — health check
+
+#### Latency and barge-in logging
+
+While a call is live, [`latency_logger.py`](latency_logger.py) parses incoming webhooks and prints structured metrics to **Terminal 1** under the `vapi_latency` logger. Look for:
+
+| Log pattern | Meaning |
+|-------------|---------|
+| `speech-update \| role='user' \| status='stopped'` → `role='assistant' \| status='started'` | Normal turn handoff |
+| `response_latency \| ms=...` | Time from user stop to assistant start |
+| `turn_duration \| role='...' \| ms=...` | How long each side held the floor |
+| `WARN BARGE_IN \| user_started_while_assistant_speaking` | User spoke over the patient bot |
+| `WARN DOUBLE_SPEAK \| assistant_started_before_stopped` | Patient bot started a new line before finishing (stacked `AI:` turns) |
+| `call_summary \| barge_ins=... \| avg_response_ms=...` | End-of-call rollup (logged when the call ends) |
+
+**Optional Vapi dashboard tuning:** The logger works with the events you already receive (`speech-update`, `conversation-update`, `status-update`, `assistant.started`). For richer signals, add `user-interrupted` and `transcript` to your assistant **Server Messages** in the Vapi dashboard.
+
+Example console output:
+
+```
+2026-06-19T20:54:04 [INFO] vapi_latency: speech-update | call_id='abc' | role='user' | status='started' | turn=2 | delta_ms=120
+2026-06-19T20:54:04 [WARN] vapi_latency: BARGE_IN | call_id='abc' | user_started_while_assistant_speaking | turn=2 | assistant_turn=1
+2026-06-19T20:54:53 [INFO] vapi_latency: call_summary | call_id='abc' | barge_ins=3 | double_speaks=1 | avg_response_ms=920 | turns=8
+```
 
 ### Terminal 2 — Expose webhook via ngrok
 
@@ -402,6 +425,7 @@ The agent displays non-deterministic behavior for the **Scheduling** intent. In 
 ```
 pg-ai-submission/
 ├── main.py           # FastAPI webhook receiver
+├── latency_logger.py # Real-time turn/latency/barge-in console logging
 ├── run_evals.py      # Outbound eval runner + test scenarios
 ├── requirements.txt
 ├── .env.example
